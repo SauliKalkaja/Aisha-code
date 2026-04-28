@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Environments
+.env
+venv/
+.venv/
+
+# Local data not in repo (download via scripts/download_artifacts.sh)
+aisha/data/raw/
+aisha/data/processed/manifold_clean.pkl
+aisha/data/processed/pos_manifold.pkl
+aisha/data/processed/manifold_*.pkl
+aisha/data/processed/sep_aisha_corpus*.txt
+aisha/data/processed/aisha_corpus.txt
+aisha/data/processed/human_b_corpus.txt
+aisha/data/processed/a_prompt_corpus.txt
+aisha/data/processed/sep_translator.npz
+aisha/data/processed/sep_input_sample.txt
+aisha/data/processed/jacobian_translator.npz
+aisha/data/processed/tangent_translator.npz
+aisha/data/processed/corpus_translator_table*.npz
+aisha/data/processed/phrase_pool.pkl
+aisha/data/processed/pos_bigram.npz
+aisha/data/processed/word_curvature.npz
+aisha/data/processed/density_norm.npz
+aisha/data/processed/figures/
+aisha/data/processed/snapshots/
+aisha/data/processed/training_*/
+aisha/data/processed/cascade_analysis/
+aisha/data/processed/heatmaps.log
+aisha/data/processed/euler_analysis/
+aisha/data/processed/figures_manifold/
+aisha/data/processed/lemma_analysis/
+aisha/data/processed/flip_analysis/
+aisha/data/processed/soft_lock_analysis/
+aisha/data/processed/shards/
+aisha/data/processed/bigrams/
+aisha/data/processed/archive/
+aisha/data/processed/*.log
+aisha/data/processed/*.json
+
+# Large pretrained models (download separately)
+glove_fast_cache.pt
+syntax_glove.pt
+wiki.multi.en.vec
+
+# Runtime caches
+aisha/logs/
+aisha/experiments/
+aisha/archive/
+
+# OS
+Thumbs.db
