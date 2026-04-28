@@ -176,7 +176,43 @@ own statistics expressed in symplectic coordinates.
 
 ---
 
-## 6. Compute footprint
+## 6. The runtime pipeline — harper → manifold → harper
+
+The math above is the engine.  The actual response loop is three
+boxes wired in series:
+
+```
+   user text  ─►  HARPER  ─►  MANIFOLD  ─►  HARPER  ─►  reply
+                  (in)        (Aisha)        (out)
+```
+
+**Harper (input).**  Before anything else touches the user's text we
+pass it through Harper — a small, open, rule-based grammar / spelling
+checker.  This fixes typos and normalises punctuation so the manifold
+gets a clean sentence.  Harper is **not** a language model: it's a
+deterministic ruleset.  No probabilistic generation, no NN.
+
+**Manifold (Aisha).**  The cleaned text is mapped to a path on the
+Kähler manifold from §5.  We extract a content boundary from the
+gradient flow `∇K`, walk the Hamiltonian flow `ξ` to add grammar
+glue, and emerge with a raw word stream.  Generation here is fully
+analytical — geodesic-style stepping on the metric `g_{αβ̄}`.
+
+**Harper (output).**  The raw stream is grammatically valid but
+sometimes off by an article, a tense, or a comma.  Harper runs a
+second pass to clean those up.  It is **only allowed to polish**
+Aisha's words — it never invents or substitutes from outside the
+stream.  This guarantees the visible reply is always the manifold's
+own output, just tidied.
+
+The "polish, never override" rule is a hard constraint: no LM, no
+retrieval, no generation from style/topic prompts.  Harper at both
+ends is the only smoothing layer; everything semantic comes from the
+manifold.
+
+---
+
+## 7. Compute footprint
 
 Inference per word:
 - One polynomial evaluation of `K` at the word's `q` (~280 ops for
@@ -190,7 +226,7 @@ RTX 4090.  The trained artifact is **~250 KB**.
 
 ---
 
-## 7. Why we put this out
+## 8. Why we put this out
 
 The math is simple.  The structure is established (symplectic
 geometry, Kähler potentials).  The empirical data shows the system
