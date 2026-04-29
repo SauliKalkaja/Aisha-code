@@ -1,6 +1,6 @@
 # Aisha Privacy Policy
 
-**Effective date:** April 24, 2026
+**Effective date:** April 29, 2026
 
 Aisha ("the app") is an on-device conversational application
 published by Sauli Kälkäjä.  This policy describes what the app
@@ -22,11 +22,13 @@ sent to any server.
 
 The app makes outbound network requests only in two situations:
 
-**a) First launch.**  Aisha downloads the manifold data files
-(approximately 165 MB total) from Hugging Face
-(`huggingface.co`) so the engine can run offline afterwards.  This
-download happens once per install.  No personal data is sent — it's
-a plain `GET` for public files.
+**a) First launch.**  Aisha downloads three asset files from
+Hugging Face (`huggingface.co`) so the engine can run offline
+afterwards: two manifold pickles (~161 MB) and the small
+instruction-tuned language model that the manifold biases
+(Qwen2.5-0.5B-Instruct, GGUF Q4_K_M, ~491 MB) — about 650 MB in
+total.  This download happens once per install.  No personal data
+is sent; it's a plain `GET` for public files.
 
 **b) Factual questions.**  When you explicitly ask a question that
 the app routes as a factual lookup (e.g. "when did X die?"), Aisha
