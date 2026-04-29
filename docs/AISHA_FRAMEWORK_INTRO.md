@@ -176,80 +176,188 @@ own statistics expressed in symplectic coordinates.
 
 ---
 
-## 6. The runtime pipeline — harper → manifold → harper
+## 6. The runtime pipeline — manifold as a structural prior on a small LM
 
-The math above is the engine.  The actual response loop is three
-boxes wired in series:
+The math above is the engine.  In production we use it as a
+**structural prior on a small instruction-tuned language model**.
+Five boxes wired in series:
 
 ```
-   user text  ─►  HARPER  ─►  MANIFOLD  ─►  HARPER  ─►  reply
-                  (in)        (Aisha)        (out)
+   user text
+       │
+       ▼
+    HARPER (in)               # rule-based grammar / spelling clean-up
+       │
+       ▼
+    MANIFOLD (Aisha)          # boundary words + intent flag + 16-D centroid
+       │           │
+       │           ▼
+       │       intent classifier → λ ∈ { 0, 1.5 }
+       ▼
+    LM  +  λ · m              # Qwen2.5-0.5B-Instruct, GGUF Q4_K_M, ~250 MB
+       │   (logit-bias mask
+       │    from boundary)
+       ▼
+    HARPER (out)              # polish only — never invents words
+       │
+       ▼
+   reply
 ```
 
-**Harper (input).**  Before anything else touches the user's text we
-pass it through Harper — a small, open, rule-based grammar / spelling
-checker.  This fixes typos and normalises punctuation so the manifold
-gets a clean sentence.  Harper is **not** a language model: it's a
-deterministic ruleset.  No probabilistic generation, no NN.
+**Harper (input).**  The user's text first passes through Harper — a
+small, open, rule-based grammar / spelling checker.  This fixes typos
+and normalises punctuation so the manifold gets a clean sentence.
+Harper is not a language model: it is a deterministic ruleset.  No
+probabilistic generation, no NN.
 
-**Manifold (Aisha).**  The cleaned text is mapped to a path on the
-Kähler manifold from §5.  We extract a content boundary from the
-gradient flow `∇K`, walk the Hamiltonian flow `ξ` to add grammar
-glue, and emerge with a raw word stream.  Generation here is fully
-analytical — geodesic-style stepping on the metric `g_{αβ̄}`.
+**Manifold (Aisha).**  The cleaned text is mapped onto the Kähler
+manifold from §5.  Three things come back:
 
-**Harper (output).**  The raw stream is grammatically valid but
-sometimes off by an article, a tense, or a comma.  Harper runs a
-second pass to clean those up.  It is **only allowed to polish**
-Aisha's words — it never invents or substitutes from outside the
-stream.  This guarantees the visible reply is always the manifold's
-own output, just tidied.
+1. A **boundary** — the manifold-neighbour words of the conversation's
+   running 16-D centroid (k-NN under POS-Kähler distance).  Typically
+   30 – 80 words.  These are the words the conversation has been about,
+   geometrically.
+2. A **structural fingerprint** — the 16-D centroid itself, the POS-class
+   mixture, and the inter-turn step.  Roughly thirty floating-point
+   numbers.  This is the conversation's compact memory.
+3. An **intent flag** — does the current question read as past-self-
+   reflective ("Was my breakfast healthy?") or advisory ("What should I
+   read?").  A small regex on the user message.
 
-The "polish, never override" rule is a hard constraint: no LM, no
-retrieval, no generation from style/topic prompts.  Harper at both
-ends is the only smoothing layer; everything semantic comes from the
-manifold.
+**Intent classifier picks λ.**  Reflective questions get λ = 0; the
+boundary bias is disabled and the LM relies on the verbatim history.
+Advisory and exploratory questions get λ = 1.5.  This single switch
+turned the boundary from a feature that wins five of eight cases into
+one that strictly dominates the words-only baseline on every metric we
+tested.  The classifier itself is seventeen lines of regex.
+
+**LM with logit bias.**  The LM (Qwen2.5-0.5B-Instruct, ~250 MB on
+disk at int4) sees the prior conversation as plain text and a per-token
+bias vector `λ · m`, where `m ∈ {0, 1}^V` is one for every token id of
+every word in the boundary.  This bias is the only place where Aisha
+"talks" to the LM: the structural numbers themselves never cross over
+as text.  We tried that earlier and the LM read words like "centroid"
+literally, started talking about AI ethics, and ignored the actual
+conversation.  The logit-bias channel is the architectural rule:
+**words for the LM, structure for Aisha**.
+
+**Harper (output).**  The LM's reply is fluent but sometimes off by an
+article or a tense.  Harper runs a second pass to clean those up.  It
+is only allowed to polish — it never invents or substitutes words from
+outside the LM's output.  This is a hard rule, the same constraint
+Aisha-only operation has always had.
+
+The pipeline runs end-to-end on the phone.  No cloud calls, no server
+tier.  The Aisha contribution at runtime is roughly thirty numbers per
+turn plus an elementwise add per token; everything else is the small
+LM doing its usual job, just with a topical anchor.
 
 ---
 
 ## 7. Compute footprint
 
-Inference per word:
-- One polynomial evaluation of `K` at the word's `q` (~280 ops for
-  deg-4 in 8 vars).
-- One Hermitian-form inner product (`(70 × 70)` Hermitian).
-- One nearest-neighbour lookup on a precomputed dialog vocabulary.
+Per response, three components:
 
-No GPU is required at runtime.  The training of `H` (one Cholesky-
-parameterized Hermitian PSD matrix) runs in ~25 minutes on a single
-RTX 4090.  The trained artifact is **~250 KB**.
+**Aisha — the structural prior.**  Per current turn:
+
+- One polynomial evaluation of `K` at each content word's `q` (~280
+  ops for deg-4 in 8 vars).
+- One Hermitian-form inner product (`(70 × 70)` Hermitian).
+- One Mahalanobis-distance pass against the manifold's vocabulary to
+  pull the K = 30 nearest neighbours of the running 16-D centroid.
+- A single regex evaluation for the intent classifier.
+
+Total Aisha time is on the order of 50 ms on a 2026 mid-range phone.
+No GPU.  The trained artifact (the Hermitian matrix `H`) is **~250 KB**.
+
+**The LM — the vocabulary engine.**  Qwen2.5-0.5B-Instruct, GGUF Q4_K_M.
+About 494 M parameters, ~250 MB on disk, a few hundred MB resident
+during inference.  Roughly 0.5 – 1 second to produce a 50-token reply
+on a Snapdragon 8 Gen 3-class phone.
+
+**The bias channel — essentially free.**  At each generation step the
+sampler does one elementwise add `ℓ + λ · m` before softmax.  Cost is
+microseconds per token.
+
+End-to-end energy per reply, estimated:
+
+| Configuration | J / reply |
+|---|---|
+| Aisha + Qwen-0.5B (this work) | ~3 J |
+| Phi-3-mini 3.8B alone, on the same phone | ~20 J |
+| Cloud GPT-class call | ~1000 J |
+
+Roughly seven times cheaper than running a "drop-in" 3.8 B-class chat
+LM on the same device, and roughly three hundred times cheaper than a
+cloud-served reply (which also adds your phone's radio for the network
+round-trip).  These are estimates from public benchmarks; a factor-of-2
+error in any direction would not change the story.
+
+The savings come from running a small LM rather than a large one.
+Aisha's contribution is making that small LM produce on-topic and
+register-matched responses without growing its parameter count.
 
 ---
 
 ## 8. Why we put this out
 
-The math is simple.  The structure is established (symplectic
-geometry, Kähler potentials).  The empirical data shows the system
-discovers content / grammar separation, locality structure, and
-human-vs-Aisha path-geometry differences — *without* a language model.
+The math is simple.  The structure is established (symplectic geometry,
+Kähler potentials, sampler chains in llama.cpp).  The empirical data
+shows the same framework discovers content / grammar separation,
+locality structure, and human-vs-Aisha path-geometry differences in
+language *and* matches NASA JPL Horizons on Mercury's orbit to >99.99 %.
+The same line element, doubled the same way, in two very different
+domains.
 
-Aisha generates grammatically valid sentences.  She does not yet
-generate semantically coherent ones; that requires further work on
-**predication** — the rules governing which word combinations carry
-meaning.  Predication is the next frontier and is genuinely open.
+The hybrid configuration — Aisha as a logit-bias on a small LM — is
+shipping in a phone app and the empirical data is in the
+[AishaLLM-experiments](https://github.com/SauliKalkaja/AishaLLM-experiments)
+repo.  On Qwen2.5-0.5B-Instruct: average factual recall up from 2.50
+to 3.12 keywords per response, stylistic match to the conversation
+register up by ~19 %, no measurable cost in fluency.  Numbers small
+enough to be honest about; pattern consistent enough across cases to
+defend.
+
+What the standalone manifold does *not* do alone is **predication** —
+which `(verb, object)` and `(adjective, noun)` combinations carry
+meaning.  Aisha-only output is grammatical word-salad because the
+manifold knows where words are but not which combinations cohere.  The
+hybrid sidesteps this by letting a small LM provide predication and
+using Aisha to keep the LM on topic across turns.  The standalone
+problem is still genuinely open and a tractable one: it is a question
+about constraint satisfaction over the symplectic structure, not about
+scaling parameters.
 
 If you're a physicist, mathematician, or linguist who sees this and
-recognizes a tool you can apply: please.  The framework is small
-enough to read in an afternoon, the code is open, and the math is
-in textbooks you already own.
+recognizes a tool you can apply: please.  The framework is small enough
+to read in an afternoon, the code is MIT-licensed, and the math is in
+textbooks you already own.  Concretely:
+
+- **Drop it into your existing LLM stack as a logit-bias sampler.**
+  See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) — recipes for llama.cpp,
+  Hugging Face `transformers`, and vLLM are short.
+- **Train your own Kähler matrix on a domain corpus.**  ~25 minutes on
+  one RTX 4090.  See `aisha/kahler_pos_train.py`.
+- **Push on standalone predication.**  The manifold gives you both
+  `∇K` (content) and `ξ = J · ∇^a K` (grammar) as orthogonal vector
+  fields.  The combinatorics of which `∇K`-`ξ` interactions form valid
+  predicates is geometric, not statistical.  Worth a try.
 
 Repository entry points:
-- `aisha/responder_pos.py` — the runtime
-- `aisha/kahler_pos_runtime.py` — analytical metric, gradient,
-  Hamiltonian flow
-- `aisha/kahler_pos_train.py` — Donaldson-form training
-- `docs/6D_Symplectic_Unification.pdf` — the underlying physics paper
 
-The compute is `O(1)` per response.  The framework is symplectic.
-The energy is one polynomial evaluation per word.  We think this
-matters.
+- `aisha/aisha_lm_helpers.py` — public API: `is_reflective_question`,
+  `aisha_structure`, `boundary_with_structural_memory`.  This is the
+  module you import in your own project.
+- `aisha/responder_pos.py` — the standalone runtime; load the
+  manifold, run a chat in Aisha-only mode.
+- `aisha/kahler_pos_runtime.py` — analytical metric, gradient,
+  Hamiltonian flow.
+- `aisha/kahler_pos_train.py` — Donaldson-form training.
+- `docs/DEVELOPER_GUIDE.md` — practical how-to for the hybrid
+  configuration.
+- `docs/6D_Symplectic_Unification.pdf` — the underlying physics paper.
+
+The compute is `O(1)` per response from Aisha's side, dominated by the
+small LM's per-token cost on the phone side.  The framework is
+symplectic.  The energy is roughly three joules per reply.  We think
+this matters.
